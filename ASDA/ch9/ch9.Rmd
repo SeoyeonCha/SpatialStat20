@@ -1,0 +1,256 @@
+---
+title: "ch9. Modelling Areal Daa"
+author: "차서연"
+date: 'Sep 6, 2020 '
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE}
+knitr::opts_knit$set(root.dir ="C:/Users/joych/Desktop/SS/SpatialStat20/ASDA/ch9")
+```
+
+
+## 9.2
+Areal Data : Constructing spatial weights is important
+```{r}
+library(spdep)
+library(rgdal)
+NY8 <- readOGR("C:/Users/joych/Desktop/SS/SpatialStat20/ASDA/ch9","NY8_utm18")
+NY_nb <- read.gal("NY_nb.gal", region.id = row.names(NY8))
+summary(NY_nb)
+```
+
+```{r}
+plot(NY8, border = "grey60")
+plot(NY_nb, coordinates(NY8), pch = 19, cex = 0.6, add = TRUE)
+```
+
+```{r}
+Syracuse <- NY8[NY8$AREANAME == "Syracuse city",]
+Sy0_nb <- subset(NY_nb, NY8$AREANAME == "Syracuse city")
+summary(Sy0_nb)
+```
+
+* k nearest neighbor objects
+```{r}
+coords <- coordinates(Syracuse)
+IDs <- row.names(Syracuse)
+Sy8_nb <-knn2nb(knearneigh(coords, k=1), row.names = IDs) 
+Sy9_nb <-knn2nb(knearneigh(coords, k=2), row.names = IDs) 
+Sy10_nb <-knn2nb(knearneigh(coords, k=4), row.names = IDs) 
+dsts <- unlist(nbdists(Sy8_nb, coords))
+Sy11_nb <-dnearneigh(coords, d1 = 0, d2 = 0.75*max(dsts), row.names = IDs)
+# 154, 168 no neighborhoods
+
+```
+
+### 9.2.2 Spatial weights objects
+```{r}
+Sy0_lw_W <- nb2listw(Sy0_nb)
+names(Sy0_lw_W)
+Sy0_lw_W$weights[2]
+names(attributes(Sy0_lw_W))
+```
+* sums are unity
+
+```{r}
+# card: cardinality, # of neighbors
+1/rev(range(card(Sy0_lw_W$neighbours)))
+# 0.11111, 1.0 
+summary(unlist(Sy0_lw_W$weights))
+summary(sapply(Sy0_lw_W$weights, sum))
+# all sums are 1
+```
+
+### binary weights
+
+```{r}
+Sy0_lw_B <- nb2listw(Sy0_nb, style = "B")
+summary(unlist(Sy0_lw_B$weights))
+summary(sapply(Sy0_lw_B$weights, sum))
+```
+
+### IDW weight
+```{r}
+dsts <- nbdists(Sy0_nb, coordinates(Syracuse))
+idw <- lapply(dsts, function(x) 1/(x/1000)) # inverse 계산
+Sy0_lw_idwB <- nb2listw(Sy0_nb, glist = idw, style = "B")
+summary(unlist(Sy0_lw_idwB$weights))
+summary(sapply(Sy0_lw_idwB$weights, sum))
+```
+
+```{r}
+Sy0_lw_D1 <- nb2listw(Sy11_nb, style = "B")
+Sy0_lw_D1 <- nb2listw(Sy11_nb, style = "B", zero.policy = TRUE)
+print(Sy0_lw_D1, zero.policy = TRUE)
+```
+
+
+### Handling Spatial Weights objects
+```{r}
+library(Matrix)
+library(spatialreg)
+sum(as_dgRMatrix_listw(Sy0_lw_W)[61,])
+```
+
+
+### 9.2.4 Spatial autocorrelations
+```{r}
+set.seed(987654)
+n <- length(Sy0_nb)
+uncorr_x <- rnorm(n)
+rho <- 0.5
+autocorr_x <- invIrW(Sy0_lw_W, rho) %*% uncorr_x
+```
+
+## 9.3 Testing for Spatial Autocorrelation
+```{r}
+moran_u <- moran.test(uncorr_x, listw = Sy0_lw_W)
+moran_a <- moran.test(autocorr_x, listw = Sy0_lw_W)
+moran_a1 <- moran.test(autocorr_x, listw = nb2listw(Sy9_nb, style = "W"))
+```
+
+* NY data
+```{r}
+moran.test(NY8$Cases, listw = nb2listw(NY_nb))
+lw_B <- nb2listw(NY_nb, style = "B")
+moran.test(NY8$Cases, listw = nb2listw(NY_nb, style = "B"))
+lm.morantest(lm(Cases ~ 1, NY8), listw = lw_B) # same
+```
+* Spatial autocorrelation exists. 
+
+* **Saddlepoint methods**
+* **Exact test**
+
+```{r}
+lm.morantest.sad(lm(Cases ~ 1, NY8), listw = lw_B)
+lm.morantest.exact(lm(Cases ~ 1, NY8), listw = lw_B)
+
+```
+
+
+* **Monte Carlo** test
+```{r}
+set.sed(1234)
+bperm <- moran.mc(NY8$Cases, listw = lw_B, nsim = 99)
+```
+
+* Poisson constant risk parametric bootstrap assessment
+```{r}
+r <- sum(NY8$Cases)/sum(NY8$POP8)
+rni <- r * NY8$POP8
+CR <- function(var, mle) rpois(length(var), lambda = mle)
+MoranI.pboot <- function(var, i, listw, n, S0, ...) {
+  return(moran(x = var, listw = listw, n=n, S0=S0)$I)
+}
+set.seed(1234)
+```
+
+```{r}
+boot2 <- boot(NY8$Cases, statistic = MoranI.pboot, 
+              R=999, sim = "parametric", ran.gen = CR,
+              listw = lw_B, n = length(Ny8$Cases), S0 = Szero(lw_B), 
+
+                            mle = rni)
+```
+
+```{r}
+moran.plot(NY8$Cases, listw = nb2listw(NY_nb, style = "C"))
+```
+
+
+## 9.4 Fitting Models of Areal Data
+
+* $Y_i$: leukaemia cases
+* covariates: 3개
+```{r}
+nylm <- lm(Z ~ NY8$PEXPOSURE + NY8$PCTAGE65P + NY8$PCTOWNHOME, data = NY8)
+summary(nylm)
+NY8$lmresid <- residuals(nylm)
+```
+
+* Moran test
+```{r}
+NYlistw <- nb2listw(NY_nb, style = "B")
+lm.morantest(nylm, NYlistw)
+```
+
+```{r}
+NYlistwW <- nb2listw(NY_nb, style = "W")
+aple(residuals(nylm), listw = NYlistwW)
+spautolm(Z ~ NY8$PEXPOSURE + NY8$PCTAGE65P + NY8$PCTOWNHOME, data = NY8,
+         listw = NYlistwW)$lambda
+```
+
+### 9.4.1.1. SAR
+
+```{r}
+NYlistw <- nb2listw(NY_nb, style = "B")
+nysar <- spautolm(Z ~ NY8$PEXPOSURE + NY8$PCTAGE65P + NY8$PCTOWNHOME, data = NY8, 
+                  listw = NYlistw)
+summary(nysar)
+```
+
+* weighted proportionally to the pop. size
+```{r}
+NY8$POP8
+nylmw <- lm(Z ~ NY8$PEXPOSURE + NY8$PCTAGE65P + NY8$PCTOWNHOME, data = NY8, 
+                  weights = POP8)
+summary(nylmw) # more significant
+lm.morantest(nylmw, NYlistw)
+```
+
+```{r}
+nysarw <- spatialreg::spautolm(Z ~ NY8$PEXPOSURE + NY8$PCTAGE65P + NY8$PCTOWNHOME, data = NY8,
+                   listw = NYlistw, weights = POP8)
+summary(nysarw) # AIC more lower
+summary(nysar)
+```
+
+### 9.4.1.2 CAR
+
+```{r}
+nycar <- spautolm(Z ~ NY8$PEXPOSURE + NY8$PCTAGE65P + NY8$PCTOWNHOME, data = NY8,
+                  family = "CAR", listw = NYlistw)
+summary(nycar)
+nycarw <- spatialreg::spautolm(Z ~ NY8$PEXPOSURE + NY8$PCTAGE65P + NY8$PCTOWNHOME, data = NY8,
+                  family = "CAR", listw = NYlistw, weights = POP8)
+summary(nycarw)
+```
+
+* Cholesky
+```{r}
+nysarwM <- spatialreg::spautolm(Z ~ NY8$PEXPOSURE + NY8$PCTAGE65P + NY8$PCTOWNHOME, data = NY8,
+                  family = "SAR", listw = NYlistw, weights = POP8, 
+                  method = "Matrix")
+summary(nysarwM)
+```
+
+```{r}
+1/range(spatialreg::eigenw(NYlistw))
+nysar_11 <- spautolm(Z ~ NY8$PEXPOSURE + NY8$PCTAGE65P + NY8$PCTOWNHOME, data = NY8,
+                     family = "SAR", listw = NYlistw, llprof = 100)
+```
+
+* SMA Model : simultaneous moving average models
+
+```{r}
+nysmaw <- spatialreg::spautolm(Z ~ NY8$PEXPOSURE + NY8$PCTAGE65P + NY8$PCTOWNHOME, data = NY8,
+                   family = "SMA", listw = NYlistw, weights = POP8)
+summary(nysmaw)
+```
+
+```{r}
+nymix <- spatialreg::lagsarlm(Z ~ PEXPOSURE + PCTAGE65P + PCTOWNHOME, data = NY8,
+                                                            listw = NYlistw, type = "mixed")
+nymix
+resMCMC <- spatialreg::MCMCsamp(nysar, listw = NYlistw, mcmc = 5000, burnin = 500)
+plot(resMCMC)
+```
+

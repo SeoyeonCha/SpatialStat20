@@ -1,0 +1,254 @@
+---
+title: "Ch10. Disease Mapping"
+author: "차서연"
+date: 'Sep 6, 2020 '
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE}
+knitr::opts_knit$set(root.dir ="C:/Users/joych/Desktop/SS/SpatialStat20/ASDA/ch10")
+```
+
+```{r}
+library(maptools)
+library(spdep)
+nc_file <- system.file("shapes/sids.shp", package="spData")[1]
+llCRS <- CRS("+proj=longlat +datum=NAD27")
+nc <- readShapePoly(nc_file, ID="FIPSNO", proj4string=llCRS)
+rn <- sapply(slot(nc, "polygons"), function(x) slot(x, "ID"))
+gal_file <- system.file("weights/ncCR85.gal", package="spData")[1]
+ncCR85 <- read.gal(gal_file, region.id = rn)
+```
+
+```{r}
+nc$Observed <- nc$SID74
+
+nc$Population <- nc$BIR74
+r <- sum(nc$Observed)/sum(nc$Population)
+nc$Expected <- nc$Population*r
+
+
+nc$SMR <- nc$Observed/nc$Expected
+```
+
+
+```{r}
+summary(logSMR)
+logSMR <- log(nc$SMR[nc$SMR>0])
+nsteps <- 7
+step <- (max(logSMR)-min(logSMR))/nsteps
+brks <- exp(min(logSMR)+(0:nsteps)*step)
+brks[1] <- 0
+cols <- c(rev(brewer.pal(3,"Blues")), brewer.pal(4,"Reds"))
+##grps
+grps <- as.ordered(cut(nc$SMR, brks, include.lowest = TRUE))
+plot(nc, col = cols[unclass(grps)], axes = FALSE)
+box()
+degAxis(1)
+degAxis(2, at = c(34,35,36,37))
+legend("bottomleft", legend = levels(grps), fill = cols, bty = "n", cex = 0.8, y.intersp = 0.8)
+```
+
+* $\nu, \alpha$ estimate (MME)
+```{r}
+library(DCluster)
+
+eb <- empbaysmooth(nc$Observed, nc$Expected)
+nc$EBPG <- eb$smthrr
+eb$nu ; eb$alpha
+eb$nu/eb$alpha # prior mean of the relative risk theta
+```
+
+
+* Probability Maps
+```{r}
+nc$pvalpois <- ppois(nc$Observed, nc$Expected, lower.tail = FALSE)
+nbparam <- calculate.mle(as(nc, "data.frame"), model = "negbin")
+nc$pvalnegbin <- pnbinom(nc$Observed, size = nbparam$size, prob = nbparam$prob, 
+                         lower.tail = FALSE)
+colorkeypval <- list(labels = as.character(c(0,0.01,0.05,0.1,0.5,1)), # 6 levels
+                     at = (0:5)/5, height = 0.5)
+pvalcols <- brewer.pal(5, "Reds")
+spplot(nc, c("pvalpois", "pvalnegbin"), col.regions = rev(pvalcols), 
+       at=c(0, 0.01, 0.05, 0.1, .5, 1), axes=TRUE)
+```
+
+
+### 10.2.2 Log-Normal Model
+```{r}
+ebln <- lognormalEB(nc$Observed, nc$Expected)
+nc$EBLN <- exp(ebln$smthrr)
+
+```
+
+### 10.2.3 Global EB estimator
+```{r}
+EBMarshall <- EBest(nc$Observed, nc$Expected)
+nc$EBMarshall <- EBMarshall[,2]
+names(nc)
+```
+
+
+```{r}
+colorkeyprob <- list(labels = levels(grps), at = (0:10)/2, height = 0.5)
+cols <- c(rev(brewer.pal(3, "Blues")), brewer.pal(4, "Reds"))
+spplot(nc, c("EBLN","EBMarshall", "EBPG","SMR"), col.regions = cols,
+       at = brks, axes = TRUE)
+
+atcol <- (0:5)*max(nc$SMR)/5
+```
+
+## 10.3 Spatially Structured Models
+```{r}
+nc$EBMrshloc <- EBlocal(nc$Observed, nc$Expected, ncCR85)$est
+spplot(nc, c("EBMarshall", "EBMrshloc"), col.regions = cols, 
+       at = brks, axes = TRUE)
+
+```
+
+## 10.4 Bayesian Hierarchical Models
+
+```{r}
+library(R2WinBUGS)
+N <- nrow(nc)
+d <- list(N=N, observed = nc$Observed, expected = nc$Expected)
+```
+
+```{r, eval=FALSE}
+model
+{
+    for(i in 1:N)
+    {
+      observed[i] ~ dpois(mu[i])
+      mu[i] <- theta[i]*expected[i]
+      theta[i] ~ dgamma(nu, alpha)
+    }
+  
+  nu ~ dgamma(0.01, 0.01)
+  alpha ~ dgamma(0.01, 0.01)
+}
+```
+
+### using stan
+```{r}
+library(rstan)
+N <- nrow(nc)
+d <- list(N=N, observed = nc$Observed, expected = nc$Expected)
+fit1 <- stan(file = "pgmodel.stan", data = d)
+```
+
+```{r}
+res <- extract(fit1)
+nc$stmean <- apply(res$theta, 2, mean)
+nc$stmedian <- apply(res$theta, 2, median)
+
+```
+
+```{r}
+spplot(nc, c("SMR", "EBPG", "stmean", "stmedian"), col.regions = cols, at = brks, axes = TRUE)
+```
+
+### BayesX
+
+```{r}
+library(R2BayesX)
+nc$AREAID <- 1:nrow(nc)
+
+pgbayesx <- bayesx(Observed ~ sx(AREAID, bs = "re"),
+                   offset = log(nc$Expected), family = "poisson", 
+                   data = as.data.frame(nc))
+```
+
+### INLA
+
+```{r}
+library(INLA)
+pginla <- inla(Observed ~ offset(log(Expected)) -1 + f(AREAID, model = "iid"), family = "poisson", 
+               data = as.data.frame(nc), control.predictor = list(compute = TRUE), 
+               control.compute = list(dic = TRUE))
+
+```
+
+
+### 10.4.2 Spatial Models
+
+### CAR Model
+
+* consider covariate : nc$nwprop
+```{r}
+idx <- match(attr(ncCR85.nb, "region.id"), nc$CNTY_ID)
+
+nc.nb <- ncCR85
+nc.nb <- nc.nb[order(idx)]
+nc.nb <- lapply(nc.nb, function(X, idx) {
+  idx[X]
+}, idx = (idx))
+class(nc.nb)<-"nb"
+nc.nb <- nc.nb[order(idx)]
+nc.nb <- nb2WB(nc.nb)
+
+nc.nb <- nb2WB(ncCR85)
+```
+
+
+```{r}
+nc$nwprop <- nc$NWBIR74/nc$BIR74
+
+```
+
+```{r}
+fit1
+# skewed
+mcmc_areas(fit1, pars = c("theta[1]", "theta[30]"))
+```
+
+### INLA
+
+```{r}
+library(INLA)
+
+INLA_BYM <- inla(Observed ~ nwprop + f(FIPS, model="iid") + 
+  f(AREAID, model="besag", graph=nb2mat(ncCR85, style="B")) + 
+  offset(log(Expected)), 
+  family="poisson", data=as(nc, "data.frame"), 
+  control.predictor=list(compute=TRUE))
+nc$INLA <- INLA_BYM$summary.fitted.values[,1]/nc$Expected
+```
+
+### BayesX
+
+```{r}
+ncgra <- nb2gra(ncCR85)
+bymbayesx <- bayesx(Observed ~ nwprop + sx(AREAID, bs = "re") + 
+                      sx(FIPSNO, bs = "spatial", map = ncgra), )
+```
+
+
+## 10.5 Geoadditive Models
+
+* BayesX  allows different types of smoothing Penalized spliens in the linear predictor by `sx`.
+* P-splines are flexible to model non-linear effects. 
+
+### P-spline with 10 knots
+```{r}
+bayessxps <- bayesx(Observed ~ sx(AREAID, bs = "ps", knots = 10),
+                    offset = log(nc$Expected), family = "poisson", 
+                    data = as.data.frame(nc))
+```
+
+### two-dimensional P-spline
+```{r}
+nc$long <- coordinates(nc)[,1]
+nc$lat <- coordinates(nc)[,2]
+bayesxte <- bayesx(Observed ~ sx(long, lat, bs = "te"),
+                   offset = log(nc$Expected), family = "poisson", 
+                   data = as.data.frame(nc))
+
+```
+

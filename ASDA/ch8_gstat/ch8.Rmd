@@ -12,7 +12,8 @@ knitr::opts_chunk$set(echo = TRUE)
 ```
 
 ```{r, echo=FALSE}
-setwd("C:/Users/joych/Desktop/SS/Textbook/ch8. IG")
+knitr::opts_knit$set(root.dir ="C:/Users/joych/Desktop/SS/SpatialStat20/ASDA/ch8_gstat")
+setwd("./SS/SpatialStat20/ASDA/ch8_gstat")
 ```
 
 ### 8.2 Exploratory Data Analysis 
@@ -22,7 +23,6 @@ setwd("C:/Users/joych/Desktop/SS/Textbook/ch8. IG")
 library(lattice)
 library(sp)
 ```
-
 
 * relationship between zink concentration & distance to the river
 ```{r}
@@ -78,7 +78,7 @@ $$\hat{Z(s_0) = \frac{\sum_{i=1}^{n}w(s_i)Z(S_i)}{\sum_{i=1}^{n}w(s_i)}}$$,
 
 * weights are computed according to thier distance to the interpolation location,
 
-$$w(s_i)$ =||s_i - s_0||^{-p}$$
+$$w(s_i) =||s_i - s_0||^{-p}$$
 
 * p: inverse distance weighting power로, distant point 에 비해 nearer point를 얼마나 더 prefer할 거냐의 정도를 결정하는데, (보통 2)
 * p 값이 클수록 가까운 점에 더 weight 많이 준다. 
@@ -220,7 +220,7 @@ lpoints(v$dist, v$gamma, col = 'black', type = 'b', lwd = 2, pch=3)
 
 #### Directional sample variogram with `alpha()` (include angle information)
 ```{r}
-plot(variogram(log(zinc)~1, meuse, alpha = (0:3)*45))
+plot(variogram(log(zinc) ~ 1, meuse, alpha = (0:3)*45))
 plot(variogram(log(zinc) ~ 1, meuse, alpha = seq(0,170,10))) # noise increase, as number of data decr.
 ```
 
@@ -252,7 +252,6 @@ plot(variogram(log(zinc) ~ 1, meuse, boundaries = c(0,50,100, seq(250,1500,250))
 * Fit parametric model to the sample variogram
 * Some variogram parametric Models are:
 ```{r}
-show.vgms()
 show.vgms(model = "Mat", kappa.range = c(0.1,0.2,0.5,1,2,5,10), max=10) #Matern class models
 ```
 
@@ -283,6 +282,7 @@ $$\gamma(h) = c(1-e^{-h/a}).$$
 v <- variogram(log(zinc) ~ 1, meuse)
 plot(v) # spherical model might be a reasonable choice 
 fit.variogram(v, vgm(1, "Sph", 800,1)) # proper initial value
+show.vgms(model = "Sph")
 fit.variogram(v, vgm(1, "Sph", 10,1)) # far from reasonable values. #singular model 
 ```
 
@@ -290,7 +290,6 @@ fit.variogram(v, vgm(1, "Sph", 10,1)) # far from reasonable values. #singular mo
 * weighted SSE $\sum_{j=1}^{p} w_j (\gamma(h) -\hat{\gamma}(h))^2$
 * two optimization steps: (i) fit partial sill(c), (ii) fit range parameter(a)
 * There are several weighted mehtod, default is: $N_j / h_j ^2$
-
 
 #### Visual fitting 
 ```{r}
@@ -314,6 +313,277 @@ fit.variogram.reml(log(zinc) ~ 1, meuse, model = vgm(0.6, "Sph", 800, 0.06))
 v.dir <- variogram(log(zinc) ~ 1, meuse, alpha = (0:3)*45)
 v.anis <- vgm(.6, "Sph", 1600, .05, anis=c(45,.3))
 plot(v.dir, v.anis)
+```
+
+### 8.4.4. Anisotropy
+
+* Anistropy의 경우 range를 *ellipse*로 define 
+```{r}
+v.dir <- variogram(log(zinc) ~ 1, meuse, alpha = (0:3)*45)
+v.anis <- vgm(.6, "Sph", 1600, .05, anis=c(45,.3))
+plot(v.dir, v.anis)
+```
+
+* Plot *variogram map* by `map = TRUE`
+```{r}
+plot(variogram(log(zinc) ~ 1, meuse, map = TRUE, cutoff = 1000, width = 100))
+```
+
+### 8.4.5 Multivariate Variogram Modelling
+* Multiple dependent spatial variables case
+* Estimating semivariances between variables is the cross variogram
+* `gstat`: ordering information
+```{r}
+# data ordering
+g <- gstat(NULL, "logCd", log(cadmium) ~ 1, meuse)
+g <- gstat(g, "logCu", log(copper) ~ 1, meuse)
+g <- gstat(g, "logPb", log(lead) ~ 1, meuse)
+g <- gstat(g, "logZn", log(zinc) ~ 1, meuse)
+g
+vm <- variogram(g)
+vm.fit <- fit.lmc(vm, g, vgm(1, "Sph", 800, 1))
+plot(vm, vm.fit)
+```
+
+* variable 간에 strong cross corrlation이 존재한다. 
+* variable 들의 direct correlation을 계산하면(since they are collocated):
+```{r}
+# this computation ignores spatial components
+cor(as.data.frame(meuse)[c("cadmium", "copper", "lead", "zinc")])
+```
+
+* `fit.lmc`: fits p.d. coefficient matrices 
+
+### 8.4.6 Residual Variogram Modelling
+```{r}
+variogram(log(zinc) ~ sqrt(dist), meuse)
+```
+* trend is simple linear
+* OLS: observations are considered independent. To honor a dependence structure present, GLS residuals can be calculated. 
+* Compute generalized least squares residuals 
+```{r}
+f <- log(zinc) ~ sqrt(dist)
+vt <- variogram(f, meuse)
+vt.fit <- fit.variogram(vt, vgm(1, "Exp", 300, 1))
+vt.fit
+g.wls <- gstat(NULL, "log-zinc", f, meuse, model = vt.fit, 
+               set = list(gls = 1))
+(variogram(g.wls)$gamma - vt$gamma) / mean(vt$gamma)
+```
+* In this case the difference between the two approaches is marginal, but this does not need to be the case.
+
+## 8.5 Spatial Prediction
+
+* Best linear unbiased predictor of $Z(s_0)$ is 
+
+$$\hat{Z}(s_0) = x(s_0)\hat{\beta} + v^{\prime}  V^{-1 }(Z(s) - X\hat{\beta})$$
+* *simple kriging weights* : $v^{\prime}  V^{-1 }$
+
+### 8.5.1 Universal, Ordinary, and Simple Kriging
+```{r}
+v <- variogram(log(zinc) ~ 1, meuse)
+v.fit <- fit.variogram(v, vgm(1, "Sph", 800, 1))
+lz.sk <- krige(log(zinc) ~ 1, meuse, meuse.grid, v.fit,
+               beta = 5.9) # beta is known : simple kriging
+lz.ok <- krige(log(zinc) ~ 1, meuse, meuse.grid, v.fit) # ordinary kriging
+lz.uk <- krige(log(zinc) ~ sqrt(dist), meuse, meuse.grid, vt.fit) # universal kriging, predictor p > 0
+```
+
+* *Simple kriging*: $\beta$ is known
+* *Ordinary Kriging* : p=0, X_0 = 1 vector `(log(zinc) ~ 1)`
+* *Universal Kriging* : predictors p>0
+
+### 8.5.2 Multivariate Prediction: Cokriging
+
+* Multiple variables may be crosscorrelated. 
+* Variale A & B has spatial correlation
+
+```{r}
+cok.maps <- predict(vm.fit, meuse.grid)
+names(cok.maps)
+```
+
+```{r}
+spplot.vcov(cok.maps)
+```
+
+* overview of the prediction error variance and covariances
+
+
+```{r}
+vm2.fit <- vm.fit
+vm2.fit$model[[3]]$range = c(0,900)
+predict(vm2.fit, meuse.grid) # range differ 
+vm2.fit$set <- list(nocheck = 1)
+x <- predict(vm2.fit, meuse.grid)
+```
+
+```{r}
+names(as.data.frame(x))
+any(as.data.frame(x)[c(2,4,6,8)] < 0)
+```
+
+### 8.5.3 Collocated Cokriging 
+
+```{r}
+g.cc <- gstat(NULL, "log.zinc", log(zinc) ~ 1, meuse, model = v.fit)
+meuse.grid$distn <- meuse.grid$dist - mean(meuse.grid$dist) + mean(log(meuse$zinc))
+vd.fit <- v.fit
+vov <- var(meuse.grid$distn)/var(log(meuse$zinc))
+vd.fit$psill <- v.fit$psill * vov
+g.cc <- gstat(g.cc, "distn", distn ~ 1, meuse.grid, nmax = 1,
+              model = vd.fit, merge = c("log.zinc", "distn"))
+vx.fit <- v.fit
+vx.fit$psill <- sqrt(v.fit$psill * vd.fit$psill) * cor(meuse$dist, log(meuse$zinc))
+g.cc <- gstat(g.cc, c("log.zinc", "distn"), model = vx.fit)
+x <- predict(g.cc, meuse.grid)
+spplot(lz.ok)
+```
+
+
+### 8.5.4 Cokriging Contrasts
+
+* `get.contr` : compute the predicted value and prediction error variance for any linear combination in a set of predictors
+
+### 8.5.5 Kriging in a Local Neighborhood
+
+* use only the data in the neighborhood of the prediction location
+
+### 8.5.6 Change of Support : Block Kriging
+
+* *point kriging* : kriging a value with a physical size equal to that of the observations
+* *block kriging* : predicts averages of larger areas or volumes
+
+* *Change of support* : when predictions are made for larger physical supprot, based on small physical support obs. 
+  * variability averages out. 
+
+* Ordinary block kriging for size 40 x 40:
+```{r}
+lz.ok <- krige(log(zinc) ~ 1, meuse, meuse.grid, v.fit, 
+               block = c(40,40))
+```
+
+* Circular shape with radius 20:
+```{r}
+xy <- expand.grid(x = seq(-20, 20, 4), y = seq(-20,20,4))
+xy <- xy[(xy$x^2 + xy$y^2) <= 20^2,] # select points in a circle
+lz.ok <- krige(log(zinc) ~ 1, meuse, meuse.grid, v.fit, 
+               block = xy)
+
+```
+
+### 8.5.7 Stratifying the Domain
+
+* *Stratified kriging* : when data contains categorical variables, apply separated krigings to the different units
+* Covariance structure(semivariogram) is differenet for the different classes. 
+* **No correlation** is assumed between residuals from different classes. 
+
+```{r}
+# assumes there is a variable part.a
+meuse$part.a <- gstat::idw(part.a ~ 1, meuse.grid, 
+                           meuse, nmax = 1)$var1.pred
+# equivalently,
+meuse$part.a <- over(meuse, meuse.grid["part.a"])[[1]]
+# or equivalently,
+meuse$part.a <- meuse.grid$part.a[over(meuse, geometry(meuse.grid))]
+```
+
+* Now perfrom kriging for each of the sub-domains
+```{r}
+x1 <- krige(log(zinc) ~  1, meuse[meuse$part.a == 0,], meuse.grid[meuse$part.a == 0, ],
+            model = vgm(0.548, "Sph", 900, 0.0654), nmin = 20, nmax = 40, maxdist = 1000)
+x2 <- krige(log(zinc) ~  1, meuse[meuse$part.a == 1,], meuse.grid[meuse$part.a == 1, ],
+            model = vgm(0.716, "Sph", 900), nmin = 20, nmax = 40, maxdist = 1000)
+
+lz.stk <- rbind(as.data.frame(x1), as.data.frame(x2))
+coordinates(lz.stk) <- c("x", "y")
+lz.stk <- as(x, "SpatialPixelsDataFrame")
+spplot(lz.stk["var1.pred"], main = "stratified kriging predictions")
+```
+
+### 8.5.8 Trend Functions and Their Coefficients
+
+* Limit predictino to the trend component $x(s_0)\hat{\beta}$, ignoring the residual
+* By argument `BLUE = TRUE` to `predict.gstat`:
+```{r}
+g.tr <- gstat(formula = log(zinc) ~  sqrt(dist), data = meuse, 
+              model = v.fit)
+predict(g.tr, meuse[1,])
+predict(g.tr, meuse[1,], BLUE = TRUE)
+```
+
+### 8.5.9 Non-linear Transformations of the Response Variable
+* Box-Cox
+```{r}
+library(MASS)
+b <- boxcox(zinc ~ sqrt(dist), data = as.data.frame(meuse))
+# lambda = 0.2
+meuse$zinc.ns <- qqnorm(meuse$zinc, plot.it = FALSE)$x
+```
+
+* *Indicator Kriging* 
+```{r}
+ind.f <- I(zinc < 500) ~ 1
+ind.fit <- fit.variogram(variogram(ind.f, meuse), vgm(1, "Sph", 800,1))
+ind.kr <- krige(ind.f, meuse, meuse.grid, ind.fit)
+summary(ind.kr$var1.pred)
+```
+
+
+### 8.5.10 Singular Matrix Errors
+* Duplicate observations lead to singular covariance matrices V
+```{r}
+meuse.dup <- rbind(as.data.frame(meuse)[1,], as.data.frame(meuse))
+coordinates(meuse.dup) <- ~x + y
+krige(log(zinc) ~ 1, meuse.dup, meuse[1,], v.fit)
+zd <- zerodist(meuse.dup)
+meuse0 <- meuse.dup[-zd[,1],] # remove the pair
+krige(log(zinc) ~ 1, meuse0, meuse[1,], v.fit)
+
+```
+
+## 8.6 Kriging, Filtering, Smoothing
+```{r}
+v <- variogram(log(zinc) ~ 1, meuse)
+v.fit <- fit.variogram(v, vgm(1, "Sph", 800, 1))
+v.fit
+log(meuse$zinc[1])
+krige(log(zinc) ~ 1, meuse, meuse[1,], v.fit) # equal
+krige(log(zinc) ~ 1, meuse, meuse_shift[1,], v.fit)
+```
+
+
+* Kriging in presence of a nugget effect, when considered as prediction in a small regrion around a prediciton location, 
+* is **discontinuous** and hence not smoth. 
+
+$$Z(s) = U(S) + \epsilon(s)$$
+* U(s) : underlying, smooth process
+
+```{r}
+err.fit <- fit.variogram(v, vgm(1, "Sph", 800, Err = 1)) #rephrasing the nugget effect as an error
+err.fit
+krige(log(zinc) ~ 1, meuse, meuse[1,], err.fit) # no longer equal, but similar
+```
+
+* Compromise:
+```{r}
+v = fit.variogram(v, vgm(1, "Sph", 800, Err = 0.01, nugget = 1), 
+                  fit.sill = c(FALSE, TRUE, TRUE))
+v
+```
+
+
+```{r}
+krige(log(zinc) ~ 1, meuse, meuse[1,], v)
+```
+* Usually, nugget and measurement error cannot be fitted separately
+
+### 8.8 Geostatistical Simulation
+
+```{r}
+lzn.sim <- krige(log(zinc) ~ 1, meuse, meuse.grid, v.fit, 
+                 nsim = 6, nmax = 40)
+spplot(lzn.sim)
 ```
 
 
