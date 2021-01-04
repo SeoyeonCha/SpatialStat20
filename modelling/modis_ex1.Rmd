@@ -1,0 +1,123 @@
+---
+title: "modis_ex1"
+author: "차서연"
+date: '2020 12 18'
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+setwd("C:/Users/joych/Desktop/SS/SpatialStat20/modelling")
+```
+
+```{r}
+library(MODISTools)
+coord <- c(-3.223774, 37.424605) # Coordinates south of Mount Kilimanjaro
+## product
+mt_products()$product
+product <- "MOD13Q1" # NDVI 
+## band ## What to query
+mt_bands(product)$band
+band <- c("250m_16_days_EVI", "250m_16_days_pixel_reliability")
+savedir <- paste0(getwd(), "/data")
+format(Sys.time(), "%Y-%m-%d")
+```
+
+```{r}
+# mt_subset() function
+subset <- mt_subset(product = "MOD13Q1",
+                    lat = -3.223774,
+                    lon = 37.424605,
+                    band = "250m_16_days_EVI",
+                    start = "2018-01-01", 
+                    end = "2019-12-31",
+                    km_lr = 2,
+                    km_ab = 2,
+                    site_name = "testsite",
+                    internal = TRUE, 
+                    progress = TRUE)
+
+mt_subset(product = "MOD13Q1",
+          site_id = "kr_gyeonggi_do_seoul_snu",
+                    band = "250m_16_days_EVI",
+                    start = "2018-01-01", 
+                    end = "2018-01-01",
+                    km_lr = 0,
+                    km_ab = 0,
+                    internal = TRUE, 
+                    progress = TRUE)
+
+```
+
+
+### Batch downloading MODIS time series
+```{r}
+## mt_batch_subset()
+## requires a data frame defining site names(site_name) and locations(lat/lon)
+
+df <- data.frame("site_name" = paste("test",1:2))
+df$lat <- 40
+df$lon <- -110
+
+subsets <- mt_batch_subset(df = df,
+                           product = "MOD11A2", 
+                           band = "LST_Day_1km",
+                           internal = TRUE,
+                           start = "2018-01-01",
+                           end = "2018-11-01")
+```
+
+
+### `mt_bbox()` 
+* Converts lower-left sinusoidal coordinates to lat-lon sf bounding box
+
+```{r}
+# convert sinusoidal to lat / lon
+lat_lon <- sin_to_ll(subset$xllcorner, subset$yllcorner)
+
+# bind with the original dataframe
+subset <- cbind(subset, lat_lon)
+
+# convert to bounding box
+bb <- apply(subset, 1, function(x){
+  mt_bbox(xllcorner = x['xllcorner'],
+          yllcorner = x['yllcorner'],
+          cellsize = x['cellsize'],
+          nrows = x['nrows'], 
+          ncols = x['ncols'])
+})
+
+head(bb)
+b1 <- bb$`1.1`
+b1[[1]]
+
+```
+
+
+## `mt_sites()`
+* Download all available fixed sites
+```{r}
+sites <- mt_sites()
+print(tail(sites))
+sites %>% filter(country=="Korea (South)")
+#snu 30
+```
+
+
+## `mt_to_raster()`
+* Convert tidy MODISTools data to raster (stack)
+* Data frame with a single band
+* reproject : reproject output to lat / long (dafault = FALSE)
+
+```{r}
+subset_r <- mt_to_raster(df = subset) 
+
+arcachon_lai
+arcachon_lc
+```
+

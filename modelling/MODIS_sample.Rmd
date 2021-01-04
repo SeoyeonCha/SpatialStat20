@@ -1,0 +1,137 @@
+---
+title: "MODIS sample"
+author: "차서연"
+date: 'Dec 17, 2020'
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r, echo=FALSE}
+knitr::opts_knit$set(root.dir ="C:/Users/joych/Desktop/SS/SpatialStat20/modelling")
+```
+
+
+This document is referenced by Koen Hufkens
+https://cran.r-project.org/web/packages/MODISTools/vignettes/modistools-vignette.html
+
+```{r, message = FALSE}
+library(raster) ; library(sp) ; library(MODIS) ; library(MODISTools)
+library(ggplot2)
+library(sf)
+library(ggrepel)
+library(dplyr)
+```
+
+```{r}
+ROIs <- data.frame("site_name" = c("Suwon"),
+                   "lat" = c(37.271702955), 
+                   "lon" = c(126.988361719))
+```
+
+
+### Listing products / bands / dates
+
+```{r}
+products <- mt_products()
+head(products)
+```
+
+ To list all available bands for a given product use the mt_bands() function. You can use the `mt_bands()` function to list all available bands for a given product. Below I list all bands for the MOD13Q1 vegetation index product.
+
+```{r}
+bands <- mt_bands(product = "MOD13Q1")
+head(bands)
+# NDVI is number 5
+mt_bands(product = "MCD12Q1")
+```
+
+```{r}
+dates <- mt_dates(product = "MOD13Q1", lat = 37, lon =127)
+# snu suwon farm 37.2713, 126.9888
+tail(dates)
+```
+
+
+### Downloading MODIS time series
+
+NDVI data MOD13Q1 and land cover data MCD12Q1
+```{r}
+start_time <- Sys.Date() 
+# download the MODIS land cover (IGBP) and NDVI data
+# for a region around the SNU suwon farm
+# location 37.272138, 126.988337
+VI <- mt_subset(product = "MOD13Q1",
+                    lat = 37.272138,
+                    lon =  126.988337,
+                    band = "250m_16_days_NDVI",
+                    start = "2018-01-01",
+                    end = "2020-11-16",
+                    km_lr = 2,
+                    km_ab = 2,
+                    site_name = "suwon",
+                    internal = TRUE,
+                    progress = FALSE)
+
+QA <- mt_subset(product = "MOD13Q1",
+  lat = 37.272138,
+  lon =  126.988337,
+  band = "250m_16_days_pixel_reliability",
+  start = "2018-01-01",
+  end = "2020-11-16",
+  km_lr = 2,
+  km_ab = 2,
+  site_name = "suwon",
+  internal = TRUE,
+  progress = FALSE)
+
+end_time <- Sys.Date() 
+end_time - start_time
+```
+
+
+```{r}
+stat_loc <- c(37.45866633045674, 126.94995477951905)
+```
+
+```{r}
+VI <- suwon_lc
+
+LC_r <- mt_to_raster(df = suwon_lc, reproject = TRUE)
+plot(LC_r)
+```
+
+```{r}
+# convert df to raster
+VI_r <- mt_to_raster(df = VI)
+QA_r <- mt_to_raster(df = QA)
+```
+
+```{r}
+## clean the data
+# create mask on pixel reliability flag set all values <0 or >1 NA
+m <- QA_r
+m[(QA_r < 0 | QA_r > 1)] <- NA # continue working with QA 0 (good data), and 1 (marginal data)
+
+# apply the mask to the NDVI raster
+VI_m <- mask(VI_r, m, maskvalue=NA, updatevalue=NA)
+
+# plot the first image
+plot(m,1) # plot mask
+
+plot(VI_m,1) # plot cleaned NDVI raster
+```
+
+
+```{r}
+MODproduct = "MOD13Q1"
+
+# See available dates, choose a window
+availableDates = mt_dates(MODproduct, ROIs$lat[1], ROIs$lon[1])
+tail(availableDates)
+```
+

@@ -1,0 +1,327 @@
+---
+title: "modis_ex2_ndvi"
+author: "차서연"
+date: '2020 12 18 '
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+setwd("./SS/SpatialStat20/modelling")
+```
+
+Reference : 
+https://jepsonnomad.github.io/tutorials/MODISTools_Intro.html
+
+```{r, results='hide'}
+library(MODISTools) ; library(tidyverse) ; library(sf)
+library(USAboundaries) ; library(ggrepel)
+```
+
+### Set up parameters
+
+```{r}
+ROIs = data.frame("site_name" = c("Henry Coe",
+                                  "Solano",
+                                  "Lake Tahoe"),
+                  "lat" = c(37.2021213, 
+                            38.4412444, 
+                            39.0898006),
+                  "lon" = c(-121.4346147, 
+                            -121.7082489, 
+                            -120.0329867))
+```
+
+```{r}
+# Access CA boundary shape
+CA = USAboundaries::us_states(resolution = "low", 
+                              states = "CA")
+
+# Plot
+ggplot() + 
+  geom_sf(data = CA) +
+  geom_point(data = ROIs,
+             aes(x = lon, y = lat)) + 
+  geom_text_repel(data = ROIs,
+                  aes(x = lon, 
+                      y = lat, 
+                      label = site_name))
+
+
+```
+
+
+```{r}
+product = "MOD13Q1"
+
+# See available dates, choose a window
+mt_dates(product, ROIs$lat[1], ROIs$lon[1]) %>% head()
+```
+
+```{r}
+start_date = "2016-01-01"
+end_date = "2019-12-31"
+
+# List available bands
+bands = mt_bands(product)
+bands$band
+```
+
+```{r}
+# Useful here are bands 2(Composite day of year), 5 (NDVI), 7 (Pixel reliability), 12(VI quality)
+bands_interest = bands[c(2,5,7,12),]$band
+bands_interest
+```
+
+### Download MODIS data
+
+```{r}
+# Benchmark the download time
+dl_start = Sys.time()
+
+# Batcj download MODIS timeseries
+DOY <- mt_batch_subset(df = ROIs, 
+                       product = product, 
+                       band = bands_interest[1], 
+                       internal = TRUE,
+                       start = start_date, 
+                       end = end_date)
+NDVI <- mt_batch_subset(df = ROIs, 
+                       product = product, 
+                       band = bands_interest[2], 
+                       internal = TRUE,
+                       start = start_date, 
+                       end = end_date)
+PR <- mt_batch_subset(df = ROIs, 
+                       product = product, 
+                       band = bands_interest[3], 
+                       internal = TRUE,
+                       start = start_date, 
+                       end = end_date)
+VIQ <- mt_batch_subset(df = ROIs, 
+                       product = product, 
+                       band = bands_interest[4], 
+                       internal = TRUE,
+                       start = start_date, 
+                       end = end_date)
+
+dl_end = Sys.time()
+dl_end - dl_start
+```
+
+### Dealing with the VIQ beast
+In the VI quality layer, values are expressed as numbers with a base 10 counting system. The VIQ layer needs to be converted into binary from in order to be interpreted. 
+
+```{r}
+# Make a new data frame that will contain binarized VIQ values
+VIQbin = VIQ
+
+# Solve for VIQ quality
+# Source: https://gis.stackexchange.com/questions/144441/how-can-i-parse-modis-mod13q1-quality-layers-in-r
+first_k_bits <- function(int, k = 16, reverse = T){
+  integer_vector <- as.integer(intToBits(int)[1:k])
+  if(reverse) integer_vector <- rev(integer_vector) # why reverse?
+  return(paste(as.character(integer_vector), collapse = ""))
+}
+
+first_k_bits(65636)
+substr(first_k_bits(7633), start = 15, stop = 16)
+
+paste(as.character(rev(as.integer(intToBits(10)[1:16]))), collapse="")
+
+# We can check the output of the function using 7633, a point of reference provided on the MODIS QA tutorial (see link above)
+
+# first_k_bits(7633)
+# Binary of 7633 is 0001110111010001
+
+# MODLAND QA = bits 0-1 = bitword 01
+# QA bitword 01 for 7633 is "01"
+# therefore substr(firstkbits(x), start = 15, stop = 16) is
+# an indicator of overall VI Quality with 
+# 00 = good quality
+# 01 = VI produced but check other layers
+# 10 = Probably cloudy
+# 11 = Pixel not produced
+
+# Binarize the VIQ values :
+VIQbin_list = lapply(VIQ$value, FUN = first_k_bits)
+VIQbin_vector = unlist(VIQbin_list)
+VIQbin$value = as.character(VIQbin_vector)
+```
+
+### Compile data
+
+```{r}
+my_bands = list(VIQbin, 
+                PR, 
+                NDVI, 
+                DOY)
+```
+
+### Metadata parameters
+First, plot the Pixel Reliability data. Good data is indicated by a pixel reliability value of 0. When the pixel reliability value is 1, the data may be ok, but other quality control measurements should be investigated. Values less than 0 and greater than 1 are no good.
+
+```{r}
+# PR == 0 means good data
+# PR == 1 maybe good, but we should check other VIQ stuff
+
+# as.POSIXct(PR$calendar_date)
+
+ggplot(my_bands[[2]], 
+       aes(x = as.POSIXct(calendar_date),
+           y = value,
+           col = site)) + 
+  geom_jitter(width = 0.1, height = 0.1) + 
+  geom_line() + 
+  ylab("QA") + 
+  xlab("Date") +
+  ggtitle("Raw pixel quality") + 
+  theme_classic()
+```
+
+We can also look at **VI Quality** layer, for example the land/water and snow/ice flags. Access each of the value by using the `substr()` function. 
+
+For the land/water mask, values of 001 indicate we’re looking at land and only land. Values between 011 and 111 indicate we’re looking at water. With the snow/ice flag, 0 is good data and 1 indicates snow or ice may be present.
+
+```{r}
+# Land/water; this flag lives on bits 11-13, which comprise the 
+# 3rd through 5th integers in the converted VIQ string.
+ggplot(my_bands[[1]],
+       aes(x = as.POSIXct(calendar_date),
+           y = substr(value, start = 3, stop = 5),
+           col = site)) + 
+  geom_jitter(width = 0.1, height = 0.1) + 
+  ylab("LandWater") + 
+  xlab("Date") +
+  ggtitle("Land/Water Flag") + 
+  theme_classic()
+```
+
+```{r}
+# 0~15 진수를 추출한건가봄
+# Snow/ice ; this flag is bit 14, which is the second integer
+# in the converted VIQ string
+
+
+
+ggplot(my_bands[[1]], 
+       aes(x = as.POSIXct(calendar_date),
+           y = as.numeric(substr(value, start = 2, stop = 2)),
+           col = site)) + 
+  geom_jitter(width = 0.1, height = 0.1) +
+  geom_line() + 
+  ylab("SnowIce") +
+  xlab("Date") +
+  ggtitle("Snow/Ice Flag") + 
+  theme_classic()
+  
+```
+
+Let s look at the raw **NDVI** time series for each site. Because of the way the MODIS satellites report NDVI, we need to scale the data by dividing by 10,000.
+
+```{r}
+# Visualize raw NDVI
+# Note that MODIS reports NDVI on a scale of 10000, so divie the values accordingly for visualization.
+
+Rawplot = ggplot(my_bands[[3]], 
+                 aes(x = as.POSIXct(calendar_date),
+                     y = value / 10000, 
+                     col = site)) + 
+  geom_point() + 
+  geom_line() + 
+  ylab("NDVI") + 
+  xlab("Date") + 
+  ggtitle("Raw NDVI download") + 
+  theme_classic() ; Rawplot
+```
+
+### Data cleaning
+Begin by filtering out poor-quality VI values based on the Pixel Reliability timeseries. Because each timeseries is saved in a common list, we can apply a filter that converts all band values to NA when a criterion is met. Let’s filter the data by saving only the points where the Pixel Reliability layer indicates at least marginally good quality data.
+```{r}
+# Remove PR is > 1(bad data)
+# convert it into NA's
+PR_filtered = lapply(my_bands, 
+                     function(x){
+                       x$value[my_bands[[2]]$value > 1] <- NA
+                       return(x)
+                     })
+
+# Visualize
+PRplot = ggplot(PR_filtered[[3]],
+                aes(x = as.POSIXct(calendar_date),
+                    y = value / 10000, 
+                    col = site)) + 
+  geom_point() + 
+  geom_line() + 
+  ylab("NDVI") + 
+  xlab("Date") + 
+  ggtitle("After pixel reliability filter") + 
+  theme_classic() ; PRplot
+```
+
+Now, filter out additional pixels using the VI Quality layer:
+```{r}
+# Mask out additional data based on land/water and snow/ice masks
+VIQ_filtered = lapply(PR_filtered, 
+                      FUN = function(x){
+                        x$value[substr(PR_filtered[[1]]$value,
+                                       start = 3, stop = 5) != "001"] <- NA
+                        x$value[substr(PR_filtered[[1]]$value,
+                                       start = 2, stop = 2) != "0"] <- NA
+                        return(x)
+                      })
+
+# Visualize
+VIQplot = ggplot(VIQ_filtered[[3]],
+                aes(x = as.POSIXct(calendar_date),
+                    y = value / 10000, 
+                    col = site)) + 
+  geom_point() + 
+  geom_line() + 
+  ylab("NDVI") + 
+  xlab("Date") + 
+  ggtitle("After pixel land/water mask") + 
+  theme_classic() ; VIQplot
+
+```
+
+You’ll notice that all of the data collected over Lake Tahoe is now gone (because we saved only data where pixels were over land and nothing but land).
+
+Finally, we need to sort the dates of the observations because of the data collection and reporting style of MODIS: The satellite takes a picture every day, and then reports the highest VI composite for each 16-day window across the year. This is nice because it helps overcome some issues related to cloud cover, but means that we need to account for differences in the date of collection across pixels but within the same collection window.
+
+To get the “Composite day of year” situation settled, we’ll need to add a few columns to each band’s data.frame. First, add a day of year measurement, which is the value reported on the DOY layer. Then extract the calendar year in another column, and finally create a YearDOY column which combines the year and DOY columns for an unambiguous date column.
+
+```{r}
+# Add three columns to each data.frame based on the DOY layer.
+DOY_corrected = lapply(VIQ_filtered, 
+                       FUN = function(x){
+                         x$DOY = VIQ_filtered[[4]]$value
+                         x$Year = substr(x$calendar_date, 
+                                         start = 1, stop = 4)
+                         x$Year_DOY = paste(x$Year, x$DOY, sep = "-")
+                         return(x)
+                       })
+
+# Visualize
+DOYplot = ggplot(DOY_corrected[[3]],
+                 aes(x = as.POSIXct(Year_DOY,
+                                    format = "%Y-%j",
+                                    origin = "2001-01-01"),
+                     y = value / 10000 ,
+                     col = site)) + 
+  geom_point() +
+  geom_line() +
+  ylab("NDVI") + 
+  xlab("Date") + 
+  ggtitle("Accounting for composite date") + 
+  theme_classic() ; DOYplot
+```
+
+You will notice when comparing the plot above to other plots we’ve made so far that the *spacing between datapoints at a given plot is no longer regular*; that is because rather than mapping NDVI against the start of the **composite period**, we’re now mapping NDVI against the **composite date**.
+
+NDVI followed typical annual cycles.NDVI at Coe, Solano increased each spring, and fell back to a winter baseline in the fall. Lake Tahoe is completely removed because of the water flag. 
