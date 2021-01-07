@@ -26,6 +26,12 @@ library(USAboundaries) ; library(ggrepel)
 ### Set up parameters
 
 ```{r}
+MODISTools::mt_bands()
+mt_products()
+mt_produ
+
+
+
 ROIs = data.frame("site_name" = c("Henry Coe",
                                   "Solano",
                                   "Lake Tahoe"),
@@ -37,6 +43,7 @@ ROIs = data.frame("site_name" = c("Henry Coe",
                             -120.0329867))
 ```
 
+
 ```{r}
 # Access CA boundary shape
 CA = USAboundaries::us_states(resolution = "low", 
@@ -45,9 +52,9 @@ CA = USAboundaries::us_states(resolution = "low",
 # Plot
 ggplot() + 
   geom_sf(data = CA) +
-  geom_point(data = ROIs,
+  geom_point(data = usa,
              aes(x = lon, y = lat)) + 
-  geom_text_repel(data = ROIs,
+  geom_text_repel(data = usa,
                   aes(x = lon, 
                       y = lat, 
                       label = site_name))
@@ -55,9 +62,27 @@ ggplot() +
 
 ```
 
+```{r}
+product = "MOD14A2"
+
+```
+
 
 ```{r}
 product = "MOD13Q1"
+product = "MOD14A2"
+product = "MCD12Q1"
+
+start_date = "2020-08-12"
+end_date = "2020-09-20"
+bands = mt_bands(product)
+mt_products()
+FRP <- mt_batch_subset(df = usa, 
+                       product = product, 
+                       band = bands[1,1], 
+                       internal = TRUE,
+                       start = start_date, 
+                       end = end_date)
 
 # See available dates, choose a window
 mt_dates(product, ROIs$lat[1], ROIs$lon[1]) %>% head()

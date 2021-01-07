@@ -18,6 +18,7 @@ knitr::opts_knit$set(root.dir ="C:/Users/joych/Desktop/SS/SpatialStat20/ASDA/ch1
 ```{r}
 library(maptools)
 library(spdep)
+library(sf)
 nc_file <- system.file("shapes/sids.shp", package="spData")[1]
 llCRS <- CRS("+proj=longlat +datum=NAD27")
 nc <- readShapePoly(nc_file, ID="FIPSNO", proj4string=llCRS)
@@ -30,6 +31,7 @@ ncCR85 <- read.gal(gal_file, region.id = rn)
 nc$Observed <- nc$SID74
 
 nc$Population <- nc$BIR74
+
 r <- sum(nc$Observed)/sum(nc$Population)
 nc$Expected <- nc$Population*r
 
@@ -39,7 +41,7 @@ nc$SMR <- nc$Observed/nc$Expected
 
 
 ```{r}
-summary(logSMR)
+library(RColorBrewer)
 logSMR <- log(nc$SMR[nc$SMR>0])
 nsteps <- 7
 step <- (max(logSMR)-min(logSMR))/nsteps

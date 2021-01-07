@@ -1,3 +1,6 @@
+## Reference : 
+## https://rstudio-pubs-static.s3.amazonaws.com/243277_01730c1f0a984132bce5d5d25bec62aa.html
+
 library(spdep)
 library(rstan)
 library(ggplot2)
@@ -57,6 +60,38 @@ summary(sp_model_scaled)
 
 # 3. A Bayesian approach
 # SAR model
+N <- nrow(ireland)
 I <- diag(N)
 W <- nb2mat(ireland.nb)
-car <- stan_model(file = 'car.stan')
+e = rep(1,N)
+data_car <- list(N = nrow(ireland), x = ireland$POPCHG, 
+                 y = ireland$A, W = W, I = I)
+car <- stan(file = 'car.stan', data = data_car)
+
+car_df <- as.data.frame(car)
+ggplot(car_df, aes(x = lambda, y = beta)) + 
+  geom_point(alpha = 0.4, col = 'indianred') +
+  geom_density2d(col = 'darkblue')
+
+car_robust <- stan(file = 'car_robust.stan', 
+                   data = data_car)
+car_robust_df <- as.data.frame(car_robust)
+ggplot(car_ht_df,aes(x=nu,y=lambda)) +  geom_point(alpha=0.4,col='indianred') + geom_density2d(col='darkblue') + geom_smooth(method='loess')
+
+
+## 3.3 SVC
+data_svc <- list(N = nrow(ireland), x = ireland$POPCHG, 
+                 y = ireland$A, W = W, e=e, I = I)
+svc <- stan(file = 'SVC.stan', data = data_svc, iter = 5000)
+
+beta_sims <- as.matrix(svc, pars = 'beta')
+ireland$local_beta <- apply(beta_sims, 2, mean)
+tm_shape(ireland) + tm_polygons(col = 'local_beta', title = 'Local beta')
+
+ireland$local_beta_sd <- apply(beta_sims,2,sd)
+tm_shape(ireland) + tm_polygons(col='local_beta_sd',title='Beta SD')
+
+svc_df <- as.data.frame(svc)
+ggplot(svc_df,aes(x=lambda_b,y=lambda)) +  geom_point(alpha=0.4,col='indianred') + geom_density2d(col='darkblue') 
+
+cor(svc_df$lambda, svc_df$lambda_b)
